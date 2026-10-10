@@ -1,10 +1,11 @@
 "use client";
 
-import { createPublicClient, createWalletClient, custom, http, hexToBigInt, erc20Abi, type Address } from "viem";
+import { createPublicClient, createWalletClient, custom, fallback, http, hexToBigInt, erc20Abi, type Address } from "viem";
 import { bsc } from "viem/chains";
 import { ChainId, CurrencyAmount, ERC20Token, Percent, TradeType } from "@pancakeswap/sdk";
 import { SmartRouter, SwapRouter, SMART_ROUTER_ADDRESSES, type SmartRouterTrade } from "@pancakeswap/smart-router";
 import { BSC_PUBLIC_RPC_URLS } from "../config/assets.ts";
+import { getActiveProvider } from "../activeProvider.ts";
 
 /**
  * Real, on-chain spot-purchase execution on BSC MAINNET (never testnet: the
@@ -56,11 +57,17 @@ export const DEFAULT_QUOTE_ASSET = {
   decimals: 18,
 };
 
+// Resolves whichever provider is actually connected right now — the
+// injected extension OR an active WalletConnect session — via
+// activeProvider.ts, instead of hardcoding window.ethereum. useWallet.ts
+// keeps that resolver in sync with its own connection state, so this
+// signing code works unchanged for either connection path.
 function walletClient() {
-  if (typeof window === "undefined" || !window.ethereum) {
+  const provider = getActiveProvider();
+  if (!provider) {
     throw new Error("No wallet provider found.");
   }
-  return createWalletClient({ chain: bsc, transport: custom(window.ethereum) });
+  return createWalletClient({ chain: bsc, transport: custom(provider) });
 }
 
 /**
@@ -86,9 +93,15 @@ function walletClient() {
  * (lib/config/assets.ts's BSC_PUBLIC_RPC_URLS) rather than introducing a
  * new RPC source.
  */
+// PRODUCTION RESILIENCE: falls through BOTH BSC_PUBLIC_RPC_URLS entries
+// (viem's fallback() transport) instead of only ever trying the first —
+// see chain.ts's own comment for why a single hardcoded endpoint is a real
+// production risk (a shared public RPC can be slow/unreachable from a
+// given network path, e.g. a hosting platform's IP range, even when it
+// works fine from a developer's own machine).
 const publicClient = createPublicClient({
   chain: bsc,
-  transport: http(BSC_PUBLIC_RPC_URLS[0], { timeout: 10_000, retryCount: 2 }),
+  transport: fallback(BSC_PUBLIC_RPC_URLS.map((url) => http(url, { timeout: 8_000, retryCount: 0 }))),
   batch: { multicall: { batchSize: 1024 * 200 } },
 });
 function readClient() {

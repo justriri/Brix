@@ -1,10 +1,11 @@
 "use client";
 
-import { createWalletClient, createPublicClient, custom, http, erc20Abi, parseEventLogs, type Address } from "viem";
+import { createWalletClient, createPublicClient, custom, fallback, http, erc20Abi, parseEventLogs, type Address } from "viem";
 import { bsc, bscTestnet } from "viem/chains";
 import { SETTLEMENT_CONTRACT_ABI } from "@/lib/protection/settlementContractAbi";
 import { CONTRACT_WRAPPER_INDEX, hashProtectionSessionId } from "@/lib/protection/settlementAuthorizationCore";
 import { BSC_PUBLIC_RPC_URLS } from "@/lib/config/assets";
+import { getActiveProvider } from "@/lib/activeProvider";
 import type { Wrapper } from "@/lib/types";
 
 /**
@@ -43,11 +44,17 @@ export function getSettlementUsdtAddress(): Address | null {
   return address ? (address as Address) : null;
 }
 
+// Resolves whichever provider is actually connected right now — the
+// injected extension OR an active WalletConnect session — via
+// activeProvider.ts, instead of hardcoding window.ethereum. useWallet.ts
+// keeps that resolver in sync with its own connection state, so this
+// signing code works unchanged for either connection path.
 function walletClient() {
-  if (typeof window === "undefined" || !window.ethereum) {
+  const provider = getActiveProvider();
+  if (!provider) {
     throw new Error("No wallet provider found.");
   }
-  return createWalletClient({ chain: resolveChain(), transport: custom(window.ethereum) });
+  return createWalletClient({ chain: resolveChain(), transport: custom(provider) });
 }
 
 /**
@@ -72,9 +79,16 @@ function walletClient() {
 function publicClient() {
   const chain = resolveChain();
   if (chain.id === bsc.id) {
-    return createPublicClient({ chain, transport: http(BSC_PUBLIC_RPC_URLS[0], { timeout: 10_000, retryCount: 2 }) });
+    // PRODUCTION RESILIENCE: falls through BOTH BSC_PUBLIC_RPC_URLS
+    // entries instead of only the first — see chain.ts's own comment.
+    return createPublicClient({
+      chain,
+      transport: fallback(BSC_PUBLIC_RPC_URLS.map((url) => http(url, { timeout: 8_000, retryCount: 0 }))),
+    });
   }
-  return createPublicClient({ chain, transport: custom(window.ethereum!) });
+  const provider = getActiveProvider();
+  if (!provider) throw new Error("No wallet provider found.");
+  return createPublicClient({ chain, transport: custom(provider) });
 }
 
 /** Chain ID (as the 0x-prefixed hex string useWallet.ts's `chainId` uses) the settlement contract is actually configured for — never hardcoded, derived from the same NEXT_PUBLIC_SETTLEMENT_CHAIN_ID resolveChain() reads, so a caller can validate the wallet is on the RIGHT chain for settlement specifically (which may differ from BSC mainnet on a testnet-first deployment). */

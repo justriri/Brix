@@ -3,7 +3,7 @@ import { getReferenceForTicker } from "@/lib/providers/reference";
 import { getErc20Decimals } from "@/lib/chain";
 import { getUsEquityMarketStatus } from "@/lib/marketCalendar";
 import { BSC_MAINNET_CHAIN_ID, type BscTokenEntry, type SupportedTicker } from "@/lib/config/assets";
-import type { Health, MarketStatus, TokenizedStock, Wrapper } from "@/lib/types";
+import type { Health, MarketStatus, ReferenceSource, TokenizedStock, Wrapper } from "@/lib/types";
 import { isWeekendGuardError } from "@/lib/errors";
 
 /**
@@ -52,14 +52,30 @@ export async function buildBscWrapperStock(
     notes.push("Could not read token decimals from chain; balances involving this token may be inaccurate.");
   }
 
-  const reference = await getReferenceForTicker(ticker, {
-    wrapper,
-    tokenContractAddress: entry.tokenAddress,
-    binanceChainId: String(BSC_MAINNET_CHAIN_ID),
-  });
-  const referenceSource = reference.primary ?? reference.fallback ?? reference.issuerReference;
-  if (!referenceSource) {
-    notes.push(reference.unavailableReason ?? "No independent reference price available.");
+  // PRODUCTION FIX: this call used to be unguarded. Unlike the DexScreener
+  // call above (wrapped in try/catch), ANY exception here — including one
+  // that escaped reference.ts's own isWeekendGuardError() rethrow gate
+  // (e.g. pyth.ts's res.json() previously throwing a raw, untyped
+  // SyntaxError on a malformed response) — propagated uncaught through
+  // this function, then through getAllWrappersForTicker's/
+  // getAllSupportedStocks' Promise.all, taking down the ENTIRE market
+  // overview (every ticker) rather than degrading just this one wrapper's
+  // reference price. Same "never let one source's failure crash
+  // everything" principle as the DexScreener handling above.
+  let referenceSource: ReferenceSource | undefined;
+  try {
+    const reference = await getReferenceForTicker(ticker, {
+      wrapper,
+      tokenContractAddress: entry.tokenAddress,
+      binanceChainId: String(BSC_MAINNET_CHAIN_ID),
+    });
+    referenceSource = reference.primary ?? reference.fallback ?? reference.issuerReference;
+    if (!referenceSource) {
+      notes.push(reference.unavailableReason ?? "No independent reference price available.");
+      if (health === "healthy") health = "warning";
+    }
+  } catch (err) {
+    notes.push(isWeekendGuardError(err) ? err.message : "Unexpected error fetching an independent reference price.");
     if (health === "healthy") health = "warning";
   }
 

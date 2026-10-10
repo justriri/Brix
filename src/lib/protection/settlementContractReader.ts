@@ -1,9 +1,10 @@
-import { createPublicClient, http, type Address } from "viem";
+import { createPublicClient, fallback, http, type Address } from "viem";
 import { bsc, bscTestnet } from "viem/chains";
 // Relative import WITH an explicit .ts extension — this file is now
 // imported transitively by settlementAuthorizationIssuer.ts, which must
 // stay resolvable by Node's test runner directly, not just Next's bundler.
 import { SETTLEMENT_CONTRACT_ABI } from "./settlementContractAbi.ts";
+import { BSC_PUBLIC_RPC_URLS } from "../config/assets.ts";
 
 /**
  * Server-side, read-only on-chain policy lookup — the piece the security
@@ -28,6 +29,27 @@ import { SETTLEMENT_CONTRACT_ABI } from "./settlementContractAbi.ts";
 function resolveChain() {
   const chainId = Number(process.env.NEXT_PUBLIC_SETTLEMENT_CHAIN_ID ?? "97");
   return chainId === 56 ? bsc : bscTestnet;
+}
+
+/**
+ * PRODUCTION RESILIENCE FIX: this used to call `http()` with no URL at
+ * all, which falls back to viem/chains' own built-in default RPC for BSC —
+ * independently observed elsewhere in this codebase
+ * (spotPurchaseClient.ts's own comment) to return HTTP 429 under load.
+ * For mainnet, now explicitly falls through BSC_PUBLIC_RPC_URLS (same
+ * vetted list chain.ts uses) via viem's fallback() transport. Testnet has
+ * no equivalent vetted list in this codebase, so it keeps using viem's
+ * default there — unchanged for that case.
+ */
+function readOnlyClient() {
+  const chain = resolveChain();
+  if (chain.id === bsc.id) {
+    return createPublicClient({
+      chain,
+      transport: fallback(BSC_PUBLIC_RPC_URLS.map((url) => http(url, { timeout: 8_000, retryCount: 0 }))),
+    });
+  }
+  return createPublicClient({ chain, transport: http() });
 }
 
 export interface OnChainPolicySummary {
@@ -80,7 +102,7 @@ export async function getOnChainPolicy(
   policyId: bigint
 ): Promise<OnChainPolicySummary | null> {
   try {
-    const client = createPublicClient({ chain: resolveChain(), transport: http() });
+    const client = readOnlyClient();
     const policy = await client.readContract({
       address: contractAddress,
       abi: SETTLEMENT_CONTRACT_ABI,
@@ -105,7 +127,7 @@ export async function getOnChainPolicy(
  * separately if that distinction matters to it.
  */
 export async function listPoliciesForOwner(contractAddress: Address, owner: Address): Promise<OnChainPolicySummary[]> {
-  const client = createPublicClient({ chain: resolveChain(), transport: http() });
+  const client = readOnlyClient();
   let nextPolicyId: bigint;
   try {
     nextPolicyId = await client.readContract({
@@ -131,7 +153,7 @@ export async function listPoliciesForOwner(contractAddress: Address, owner: Addr
 /** The contract's trustedSigner() — lets a caller cross-check the configured SETTLEMENT_SIGNER_PRIVATE_KEY's own address actually matches what the deployed contract trusts, rather than assuming it. */
 export async function getOnChainTrustedSigner(contractAddress: Address): Promise<Address | null> {
   try {
-    const client = createPublicClient({ chain: resolveChain(), transport: http() });
+    const client = readOnlyClient();
     return await client.readContract({
       address: contractAddress,
       abi: SETTLEMENT_CONTRACT_ABI,

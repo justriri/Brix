@@ -1,6 +1,10 @@
 import dns from "node:dns";
-import { WeekendGuardError } from "@/lib/errors";
-import type { ReferenceSource } from "@/lib/types";
+// Relative, with explicit .ts extension — same convention as
+// issuerReference.ts/settlementContractReader.ts, so this module stays
+// directly importable by Node's test runner (pyth.test.mts), not just
+// Next's bundler (which resolves the @/ alias on its own).
+import { WeekendGuardError } from "../errors.ts";
+import type { ReferenceSource } from "../types.ts";
 
 /**
  * Pyth Network Hermes client.
@@ -97,7 +101,20 @@ export async function getPythLatestPrice(
     });
   }
 
-  const data = (await res.json()) as HermesLatestPriceResponse;
+  let data: HermesLatestPriceResponse;
+  try {
+    data = (await res.json()) as HermesLatestPriceResponse;
+  } catch (err) {
+    // A malformed/truncated response body (observed, elsewhere in this
+    // codebase, to happen under upstream proxy issues) must surface as the
+    // same typed "API unavailable" case as every other Hermes failure mode
+    // above — not escape as a raw, untyped SyntaxError. An untyped error
+    // here previously bypassed reference.ts's isWeekendGuardError() check
+    // and got rethrown uncaught, which could crash the ENTIRE market
+    // overview (every ticker, not just this one feed) rather than just
+    // this one reference lookup.
+    throw new WeekendGuardError("API_UNAVAILABLE", "Pyth Hermes returned an unparseable response", { feedId, err });
+  }
   const parsed = data.parsed?.[0];
   if (!parsed) {
     throw new WeekendGuardError("MISSING_REFERENCE_PRICE", "Pyth Hermes returned no price for feed", {

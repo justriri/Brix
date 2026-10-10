@@ -18,21 +18,31 @@ import { dirname, resolve } from "node:path";
  *   - no external service to run/configure (unlike Postgres/Redis),
  *   - no ORM needed for ~2 tables.
  *
- * HONEST LIMITATION: a single SQLite file only works for a SINGLE SERVER
- * PROCESS/INSTANCE with a persistent local filesystem. It would NOT survive
- * or behave correctly on a horizontally-scaled multi-instance deployment,
- * or on a platform with an ephemeral/read-only filesystem (e.g. typical
- * serverless functions) — there is no evidence this project targets either
- * of those, and the brief says not to introduce infrastructure the project
- * doesn't already need. If WeekendGuard is later deployed behind multiple
- * instances or serverless functions, this file is the one place that would
- * need to change (to a real network database) — see the final report's
- * "remaining limitation" section.
+ * HONEST LIMITATION (now deployed, so this is live, not hypothetical): a
+ * single SQLite file only works for a SINGLE SERVER PROCESS/INSTANCE with a
+ * persistent local filesystem. On Vercel's serverless functions
+ * specifically, the deployment's own directory (`process.cwd()`) is
+ * READ-ONLY at runtime — only `/tmp` is writable, and `/tmp` itself is NOT
+ * guaranteed to persist between separate invocations (a fresh cold start
+ * can get a fresh, empty `/tmp`). The original `resolve(process.cwd(),
+ * "data", ...)` path would THROW on `mkdirSync` the moment any route
+ * touching this module (every protection/settlement route) is invoked on
+ * Vercel — a real, concrete crash, not just a persistence gap. Detecting
+ * Vercel (`process.env.VERCEL`, set automatically by the platform — no
+ * configuration needed) and falling back to `/tmp` fixes the crash; it does
+ * NOT fix the underlying persistence limitation, which still requires a
+ * real network database (Postgres/Turso/etc.) for monitoring state to
+ * survive reliably across invocations in this environment. That migration
+ * is out of scope here — this change only ensures the app doesn't crash
+ * in the meantime.
  */
 
 function resolveDbPath(): string {
   const configured = process.env.WEEKENDGUARD_DB_PATH;
   if (configured) return configured;
+  if (process.env.VERCEL) {
+    return "/tmp/weekendguard.sqlite";
+  }
   return resolve(process.cwd(), "data", "weekendguard.sqlite");
 }
 
