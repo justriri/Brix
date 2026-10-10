@@ -1,0 +1,23 @@
+{
+  "name": "weekendguard-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WeekendGuard settlement contract — isolated Hardhat subproject (own node_modules/toolchain, never imported by the Next.js app) so the main app's build/lint/test pipeline is untouched.",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "deploy:testnet": "hardhat run scripts/deploy.ts --network bscTestnet",
+    "deploy:mainnet": "hardhat run scripts/deploy.ts --network bscMainnet",
+    "check:testnet": "hardhat run scripts/check-deployment-readiness.ts --network bscTestnet",
+    "check:mainnet": "hardhat run scripts/check-deployment-readiness.ts --network bscMainnet"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "5.0.2",
+    "dotenv": "^18.0.5",
+    "hardhat": "^2.22.0",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.6.3"
+  }
+}
